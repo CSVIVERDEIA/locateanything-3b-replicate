@@ -42,6 +42,9 @@ Você **não precisa** mexer em quase nada: joga a foto, escreve o que quer em i
 | `video` | file | — | — | Vídeo. É amostrado em frames e detectado quadro-a-quadro. |
 | `prompt` | str | "Detect all the main objects…" | — | O que localizar. Ver **Dicas de prompt**. |
 | `tiles` | int | 1 | 1–5 | **[imagem]** Divide em NxN pedaços e detecta cada um em resolução cheia (+ NMS). Recupera objetos **pequenos/ao fundo** — mas pode gerar **falso-positivo** em fundo com texturas confundíveis (pedra/mato). 1 = desligado. Ver **Quando (não) usar tiling**. |
+| `verify` | bool | false | — | **[imagem]** Verifica cada caixa com **CLIP** e descarta falso-positivo (pedra/mato marcado como objeto). Requer `verify_object`. |
+| `verify_object` | str | "" | — | **[imagem]** O que cada caixa DEVE ser, em inglês singular (`cow`, `egg`, `box`, `person`). |
+| `verify_threshold` | float | 0.15 | 0–0.9 | **[imagem]** Severidade. Baixo (0.1–0.2) = só corta falso-positivo óbvio. Alto (0.3–0.4) = limpa mais, mas pode cortar objeto pequeno/borrado real. |
 | `generation_mode` | enum | `hybrid` | hybrid / ar / mtp | Modo de decodificação. `hybrid` equilibra velocidade e precisão. |
 | `tracker` | enum | `none` | none / sort / reid | **[vídeo]** `none` = só caixas, sem ID (estilo NVIDIA). `sort` = IDs por movimento (Kalman+Hungarian). `reid` = SORT + aparência (ResNet18). |
 | `detect_fps` | float | 3.0 | 0.5–10 | **[vídeo]** Detecções por segundo. Mais alto = acompanha melhor o movimento, mais lento/caro. |
@@ -58,6 +61,7 @@ Você **não precisa** mexer em quase nada: joga a foto, escreve o que quer em i
 - **`temperature`** — o "quão criativo" ele é. **Pra contar, deixe `0`** (mais preciso, não inventa). Valores altos = mais chute.
 - **`max_new_tokens`** — quanto ele "pode falar". Cada objeto gasta um pouco. Se a foto tem **muitos** objetos (centenas) e a contagem parece cortada, **aumente** (ex.: 8192).
 - **`tiles`** *(só imagem)* — "lupa por pedaços". O modelo tem um **teto de resolução** e some com objeto pequeno/distante. Com `tiles: 3`, ele corta a foto em 3×3 e olha cada pedaço de perto → **acha os pequenos do fundo**. ⚠️ **Cuidado:** ao focar num pedaço, ele também fica mais propenso a **confundir textura com objeto** (ex.: marcar **pedra como boi**). Não é bala de prata — ver abaixo. Quanto maior o N, mais lento (NxN análises).
+- **`verify` + `verify_object`** *(só imagem)* — "porteiro" anti-falso-positivo. Liga um segundo modelo (CLIP) que olha **cada caixa** e pergunta "isso é mesmo um(a) {verify_object}?". Se for pedra/mato, **descarta**. Use quando aparecer lixo nas detecções. O **`verify_threshold`** regula a rigidez: comece baixo (0.15); se ainda sobrar pedra, suba pra 0.3.
 - **`detect_fps`** *(só vídeo)* — **quantas vezes por segundo** ele olha o vídeo. Objeto **rápido** (carro, esteira) → número **alto** (5–10), pra acompanhar. Objeto **lento** → 2–3 já basta. Quanto maior, mais lento e mais caro.
 - **`max_detect_frames`** *(só vídeo)* — um **limite de segurança** de quantos quadros ele analisa (pra não ficar caro/demorado em vídeo longo). Se quiser mais precisão num vídeo, **aumente**.
 - **`tracker`** *(só vídeo)* — como ele lida com a **identidade** dos objetos:
@@ -75,6 +79,7 @@ Você **não precisa** mexer em quase nada: joga a foto, escreve o que quer em i
 | **Contar objetos numa foto** (gado, ovos, peças) | `image` + `prompt: "Detect every individual X. Output one tight box per X."` + **`temperature: 0`** + `max_new_tokens: 8192` |
 | **Contar objetos PEQUENOS num fundo LIMPO** (ovos na bandeja, pinguins no gelo, vista aérea densa) | acima **+ `tiles: 3`** (ou 4–5 em foto bem grande) |
 | **Cena com texturas confundíveis** (pasto com pedras/moitas, terreno irregular) | **mantenha `tiles: 1`** — o tiling tende a marcar pedra/mato como objeto |
+| **Limpar falso-positivo** (pedra/mato virou objeto) | `verify: true` + `verify_object: "cow"` (ou o que for) + `verify_threshold: 0.3` se ainda sobrar pedra |
 | **Achar UMA coisa específica** numa foto | `image` + `prompt: "Detect the red car"` (descreva bem) |
 | **Marcar um ponto** em cada objeto (não caixa) | `image` + `prompt: "Point to each person."` |
 | **Vídeo bonito e fluido** (estilo NVIDIA, sem números) | `video` + **`tracker: none`** + `detect_fps: 5` (ou mais) + `max_detect_frames: 60` |

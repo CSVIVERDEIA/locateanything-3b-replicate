@@ -26,6 +26,7 @@ from scipy.optimize import linear_sum_assignment
 from PIL import Image, ImageDraw, ImageFont
 from cog import BasePredictor, BaseModel, Input, Path
 from transformers import AutoConfig, AutoModel, AutoTokenizer, AutoProcessor
+from transformers import CLIPModel, CLIPProcessor
 
 MODEL_PATH = "/src/weights/model"
 
@@ -368,7 +369,46 @@ class Predictor(BasePredictor):
         ).to(self.device)
         self.model.eval()
         self._reid = None  # extrator de aparência ReID (lazy: só carrega se usado)
+        self._clip = None  # (modelo, processor) CLIP p/ verificação (lazy)
         print(f"[setup] DONE (t={time.time()-t0:.1f}s)", flush=True)
+
+    def _get_clip(self):
+        if self._clip is None:
+            m = CLIPModel.from_pretrained("/src/weights/clip", local_files_only=True)
+            p = CLIPProcessor.from_pretrained("/src/weights/clip", local_files_only=True)
+            self._clip = (m.eval().to(self.device), p)
+        return self._clip
+
+    @torch.no_grad()
+    def _verify(self, pil, boxes, obj, threshold):
+        """Verifica cada caixa com CLIP (zero-shot). MANTÉM a caixa a menos que o CLIP
+        esteja confiante que é pedra/grama/fundo — i.e., descarta só se P('{obj}') < threshold.
+        Threshold baixo = lenient (só corta falso-positivo óbvio). Alto = severo."""
+        if not boxes:
+            return boxes
+        model, proc = self._get_clip()
+        texts = [
+            f"a photo of a {obj}",
+            "a photo of a rock or stone",
+            "a photo of grass, dirt or bare ground",
+            "an empty blurry background",
+        ]
+        crops = []
+        for b in boxes:
+            x1 = max(0, int(min(b["x1"], b["x2"]))); x2 = max(x1 + 1, int(max(b["x1"], b["x2"])))
+            y1 = max(0, int(min(b["y1"], b["y2"]))); y2 = max(y1 + 1, int(max(b["y1"], b["y2"])))
+            crops.append(pil.crop((x1, y1, x2, y2)))
+        kept = []
+        B = 64
+        for i in range(0, len(crops), B):
+            chunk = crops[i:i + B]
+            inputs = proc(text=texts, images=chunk, return_tensors="pt", padding=True).to(self.device)
+            probs = model(**inputs).logits_per_image.softmax(dim=1)  # (n_crops, n_texts)
+            pos = probs[:, 0].cpu().tolist()  # P('{obj}')
+            for j, p in enumerate(pos):
+                if p >= threshold:
+                    kept.append(boxes[i + j])
+        return kept
 
     def _get_reid(self):
         if self._reid is None:
@@ -488,6 +528,22 @@ class Predictor(BasePredictor):
                         "Ex.: 3 = 3x3 = 9 inferências (mais lento). Ótimo para CONTAGEM densa.",
             default=1, ge=1, le=5,
         ),
+        verify: bool = Input(
+            description="[Imagem] Verifica cada caixa com CLIP e descarta falso-positivo "
+                        "(ex.: pedra/mato marcado como objeto). Requer 'verify_object'.",
+            default=False,
+        ),
+        verify_object: str = Input(
+            description="[Imagem] O que cada caixa DEVE ser, em inglês e no singular "
+                        "(ex.: 'cow', 'egg', 'box', 'person'). Usado pela verificação CLIP.",
+            default="",
+        ),
+        verify_threshold: float = Input(
+            description="[Imagem] Severidade da verificação. Baixo (0.1-0.2) = lenient, só "
+                        "corta falso-positivo ÓBVIO (recomendado). Alto (0.4+) = severo, "
+                        "mas pode cortar objeto pequeno/borrado de verdade.",
+            default=0.15, ge=0.0, le=0.9,
+        ),
         detect_fps: float = Input(
             description="[Vídeo] Quantas vezes por segundo rodar a detecção. Mais alto = "
                         "caixas acompanham melhor o movimento, porém mais lento.",
@@ -532,9 +588,18 @@ class Predictor(BasePredictor):
                 answer = self._infer_image(pil, prompt, *gen)
                 boxes, points = _parse_detections(answer, width, height)
 
+            # Verificação CLIP: descarta caixas que não parecem o objeto-alvo (pedra/mato).
+            verified_info = None
+            if verify and verify_object.strip():
+                n_before = len(boxes)
+                boxes = self._verify(pil, boxes, verify_object.strip(), float(verify_threshold))
+                verified_info = {"object": verify_object.strip(), "threshold": float(verify_threshold),
+                                 "before": n_before, "after": len(boxes)}
+
             detections = json.dumps({
                 "modality": "image", "answer": answer, "coords": "pixels",
-                "tiles": int(tiles), "image_width": width, "image_height": height,
+                "tiles": int(tiles), "verified": verified_info,
+                "image_width": width, "image_height": height,
                 "boxes": boxes, "points": points,
             }, ensure_ascii=False)
 
