@@ -107,6 +107,39 @@ def _draw(pil_image, boxes, points):
     return img
 
 
+def _nms_boxes(boxes, iou_thr=0.45, contain_thr=0.80):
+    """Remove caixas duplicadas (mesmas detectadas em tiles que se sobrepõem).
+    Sem score do modelo -> ordena por área (mantém a mais completa) e suprime
+    as muito sobrepostas (IoU) ou quase contidas (containment)."""
+    arr = sorted(boxes, key=lambda b: (b["x2"] - b["x1"]) * (b["y2"] - b["y1"]), reverse=True)
+    kept = []
+    for b in arr:
+        dup = False
+        ab = max(1.0, (b["x2"] - b["x1"]) * (b["y2"] - b["y1"]))
+        for k in kept:
+            ix1 = max(b["x1"], k["x1"]); iy1 = max(b["y1"], k["y1"])
+            ix2 = min(b["x2"], k["x2"]); iy2 = min(b["y2"], k["y2"])
+            inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+            ak = max(1.0, (k["x2"] - k["x1"]) * (k["y2"] - k["y1"]))
+            iou = inter / (ab + ak - inter)
+            if iou > iou_thr or (inter / ab) > contain_thr:
+                dup = True
+                break
+        if not dup:
+            kept.append(b)
+    return kept
+
+
+def _dedup_points(points, min_dist_frac=0.012, diag=1000.0):
+    """Junta points muito próximos (mesmo objeto visto em tiles vizinhos)."""
+    thr = (min_dist_frac * diag) ** 2
+    kept = []
+    for p in points:
+        if all((p["x"] - q["x"]) ** 2 + (p["y"] - q["y"]) ** 2 > thr for q in kept):
+            kept.append(p)
+    return kept
+
+
 def _iou_batch(dets, trks):
     """IoU entre cada det (N,4) e cada track (M,4) -> matriz (N,M)."""
     trks = np.expand_dims(trks, 0)
@@ -404,6 +437,31 @@ class Predictor(BasePredictor):
         return answer if isinstance(answer, str) else str(answer)
 
     @torch.no_grad()
+    def _infer_tiled(self, pil, prompt, gen, n, overlap=0.15):
+        """Tiling: divide a imagem em n×n pedaços (com sobreposição), detecta cada um
+        em resolução cheia, mapeia as caixas de volta p/ a imagem inteira e dedup com NMS.
+        Recupera objetos pequenos/ao fundo que o teto de resolução do modelo perderia."""
+        W, H = pil.size
+        tw, th = W / n, H / n
+        ov_w, ov_h = tw * overlap, th * overlap
+        all_boxes, all_points = [], []
+        for r in range(n):
+            for c in range(n):
+                x0 = max(0, int(c * tw - ov_w)); y0 = max(0, int(r * th - ov_h))
+                x1 = min(W, int((c + 1) * tw + ov_w)); y1 = min(H, int((r + 1) * th + ov_h))
+                crop = pil.crop((x0, y0, x1, y1))
+                cw, ch = crop.size
+                ans = self._infer_image(crop, prompt, *gen)
+                bxs, pts = _parse_detections(ans, cw, ch)  # pixels locais do tile
+                for b in bxs:
+                    all_boxes.append({"x1": b["x1"] + x0, "y1": b["y1"] + y0,
+                                      "x2": b["x2"] + x0, "y2": b["y2"] + y0})
+                for p in pts:
+                    all_points.append({"x": p["x"] + x0, "y": p["y"] + y0})
+        diag = (W ** 2 + H ** 2) ** 0.5
+        return _nms_boxes(all_boxes), _dedup_points(all_points, diag=diag)
+
+    @torch.no_grad()
     def predict(
         self,
         image: Path = Input(
@@ -423,6 +481,12 @@ class Predictor(BasePredictor):
             description="Modo de decodificação. 'hybrid' equilibra velocidade e precisão.",
             choices=["hybrid", "ar", "mtp"],
             default="hybrid",
+        ),
+        tiles: int = Input(
+            description="[Imagem] Tiling: divide a imagem em NxN pedaços e detecta cada um "
+                        "em resolução cheia (recupera objetos pequenos/ao fundo). 1 = desligado. "
+                        "Ex.: 3 = 3x3 = 9 inferências (mais lento). Ótimo para CONTAGEM densa.",
+            default=1, ge=1, le=5,
         ),
         detect_fps: float = Input(
             description="[Vídeo] Quantas vezes por segundo rodar a detecção. Mais alto = "
@@ -460,12 +524,17 @@ class Predictor(BasePredictor):
         if not is_video:
             pil = Image.open(src).convert("RGB")
             width, height = pil.size
-            answer = self._infer_image(pil, prompt, *gen)
-            boxes, points = _parse_detections(answer, width, height)
+            if tiles and tiles > 1:
+                # Tiling: NxN pedaços em resolução cheia + NMS -> recupera os pequenos.
+                boxes, points = self._infer_tiled(pil, prompt, gen, int(tiles))
+                answer = f"[tiled {tiles}x{tiles}]"
+            else:
+                answer = self._infer_image(pil, prompt, *gen)
+                boxes, points = _parse_detections(answer, width, height)
 
             detections = json.dumps({
                 "modality": "image", "answer": answer, "coords": "pixels",
-                "image_width": width, "image_height": height,
+                "tiles": int(tiles), "image_width": width, "image_height": height,
                 "boxes": boxes, "points": points,
             }, ensure_ascii=False)
 

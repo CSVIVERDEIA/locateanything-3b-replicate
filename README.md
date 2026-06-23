@@ -41,6 +41,7 @@ Você **não precisa** mexer em quase nada: joga a foto, escreve o que quer em i
 | `image` | file | — | — | Imagem RGB. Use `image` **ou** `video` (o modelo detecta o tipo do arquivo sozinho). |
 | `video` | file | — | — | Vídeo. É amostrado em frames e detectado quadro-a-quadro. |
 | `prompt` | str | "Detect all the main objects…" | — | O que localizar. Ver **Dicas de prompt**. |
+| `tiles` | int | 1 | 1–5 | **[imagem]** Divide em NxN pedaços e detecta cada um em resolução cheia (+ NMS). Recupera objetos **pequenos/ao fundo**. 1 = desligado. Ótimo p/ **contagem densa**. |
 | `generation_mode` | enum | `hybrid` | hybrid / ar / mtp | Modo de decodificação. `hybrid` equilibra velocidade e precisão. |
 | `tracker` | enum | `none` | none / sort / reid | **[vídeo]** `none` = só caixas, sem ID (estilo NVIDIA). `sort` = IDs por movimento (Kalman+Hungarian). `reid` = SORT + aparência (ResNet18). |
 | `detect_fps` | float | 3.0 | 0.5–10 | **[vídeo]** Detecções por segundo. Mais alto = acompanha melhor o movimento, mais lento/caro. |
@@ -56,6 +57,7 @@ Você **não precisa** mexer em quase nada: joga a foto, escreve o que quer em i
 - **`prompt`** — a frase (em inglês) dizendo o que procurar. É o controle **mais importante**. Ex.: `"Detect all the people"` (ache todas as pessoas). Seja específico.
 - **`temperature`** — o "quão criativo" ele é. **Pra contar, deixe `0`** (mais preciso, não inventa). Valores altos = mais chute.
 - **`max_new_tokens`** — quanto ele "pode falar". Cada objeto gasta um pouco. Se a foto tem **muitos** objetos (centenas) e a contagem parece cortada, **aumente** (ex.: 8192).
+- **`tiles`** *(só imagem)* — "lupa por pedaços". O modelo tem um **teto de resolução** e some com objeto pequeno/distante. Com `tiles: 3`, ele corta a foto em 3×3 e olha cada pedaço de perto → **acha os pequenos do fundo**. Use pra **contar** em foto grande/densa. Quanto maior o N, mais lento (NxN análises).
 - **`detect_fps`** *(só vídeo)* — **quantas vezes por segundo** ele olha o vídeo. Objeto **rápido** (carro, esteira) → número **alto** (5–10), pra acompanhar. Objeto **lento** → 2–3 já basta. Quanto maior, mais lento e mais caro.
 - **`max_detect_frames`** *(só vídeo)* — um **limite de segurança** de quantos quadros ele analisa (pra não ficar caro/demorado em vídeo longo). Se quiser mais precisão num vídeo, **aumente**.
 - **`tracker`** *(só vídeo)* — como ele lida com a **identidade** dos objetos:
@@ -71,6 +73,7 @@ Você **não precisa** mexer em quase nada: joga a foto, escreve o que quer em i
 | Situação | Configuração recomendada |
 |---|---|
 | **Contar objetos numa foto** (gado, ovos, peças) | `image` + `prompt: "Detect every individual X. Output one tight box per X."` + **`temperature: 0`** + `max_new_tokens: 8192` |
+| **Contar com objetos PEQUENOS / ao fundo** | acima **+ `tiles: 3`** (ou 4–5 em foto bem grande/densa) |
 | **Achar UMA coisa específica** numa foto | `image` + `prompt: "Detect the red car"` (descreva bem) |
 | **Marcar um ponto** em cada objeto (não caixa) | `image` + `prompt: "Point to each person."` |
 | **Vídeo bonito e fluido** (estilo NVIDIA, sem números) | `video` + **`tracker: none`** + `detect_fps: 5` (ou mais) + `max_detect_frames: 60` |
@@ -184,7 +187,7 @@ Custo de vídeo ≈ `frames_detectados × (0.0044 L40S / 0.0026 H100)`, onde `fr
 
 ## Limitações (honestas)
 
-- **Teto de resolução:** o modelo reduz internamente imagens acima de ~**803k px (~896×896)** (`in_token_limit=4096`). Objetos muito pequenos/ao fundo podem sumir mesmo enviando foto grande. (Para esses casos: tiling — não incluído neste wrapper.)
+- **Teto de resolução:** o modelo reduz internamente imagens acima de ~**803k px (~896×896)** (`in_token_limit=4096`). Objetos muito pequenos/ao fundo podem sumir em foto grande. **Solução:** use **`tiles`** (2–5) para detectar por pedaços em resolução cheia.
 - **Vídeo é detecção por frame**, não tracking nativo. Cenas densas/rápidas (esteira) causam IDs instáveis em `sort`/`reid` — use `none`.
 - **Alucinação:** pode inventar 1–2 caixas quando o objeto pedido não existe.
 - **Licença:** o modelo base é **NVIDIA License (uso não-comercial)**. Revise antes de produção.
