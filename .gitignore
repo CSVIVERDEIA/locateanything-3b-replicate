@@ -1,0 +1,11 @@
+weights/
+__pycache__/
+*.pyc
+.DS_Store
+.cog/
+schema.json
+*.log
+build.sh
+run_v12.sh
+push_h100.sh
+build_both.sh

@@ -1,0 +1,43 @@
+build:
+  gpu: true
+  cuda: "12.4"
+  python_version: "3.11"
+  python_packages:
+    - "torch==2.6.0"
+    - "torchvision==0.21.0"
+    - "transformers==4.57.1"
+    - "accelerate>=1.0.0"
+    - "pillow>=10.0.0"
+    - "opencv-python-headless==4.11.0.86"
+    - "sentencepiece>=0.2.0"
+    - "protobuf>=4.25.0"
+    - "einops>=0.8.0"
+    - "huggingface_hub>=0.24.0"
+    # CRITICAL: o codigo custom (trust_remote_code) exige decord + lmdb pra carregar
+    # o processador. decord oficial nao tem wheel p/ py3.11 -> usar fork eva-decord
+    # (provê o modulo 'decord'). av (PyAV) habilita torchvision.io.read_video p/ video.
+    - "eva-decord>=0.6.1"
+    - "lmdb>=1.4.0"
+    - "av>=12.0.0"
+    # scipy: Hungarian (linear_sum_assignment) p/ o tracker SORT do vídeo
+    - "scipy>=1.11.0"
+    # modeling_locateanything.py importa peft (LoraConfig/get_peft_model) -> obrigatorio p/ carregar
+    - "peft>=0.11.0"
+    # NOTA: flash-attn foi REMOVIDO de proposito. Nenhum wheel pre-compilado do flash-attn
+    # casa com este torch 2.6 (cxx11_abi=False) -> ImportError "undefined symbol __cxx11".
+    # O OOM de video com SDPA e resolvido limitando VIDEO_MAX_PIXELS no predict.py.
+  system_packages:
+    - libgl1
+    - libglib2.0-0
+  run:
+    # CRITICAL: single line. mount target required. Weights downloaded INSIDE the build.
+    - command: python -c "import os; os.environ['HF_HUB_DISABLE_XET']='1'; from huggingface_hub import snapshot_download; snapshot_download(repo_id='nvidia/LocateAnything-3B', local_dir='/src/weights/model', token=open('/run/secrets/HF_TOKEN').read().strip())"
+      mounts:
+        - type: secret
+          id: HF_TOKEN
+          target: /run/secrets/HF_TOKEN
+    # Baixa os pesos do ResNet18 (ImageNet) p/ o embedding de aparência do ReID.
+    # Feito no build (runtime é offline). fc removido -> state_dict só do backbone.
+    - command: python -c "import torch, torchvision; m = torchvision.models.resnet18(weights='IMAGENET1K_V1'); m.fc = torch.nn.Identity(); torch.save(m.state_dict(), '/src/weights/reid_resnet18.pth')"
+
+predict: "predict.py:Predictor"
