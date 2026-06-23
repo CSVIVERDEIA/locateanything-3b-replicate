@@ -41,7 +41,7 @@ Você **não precisa** mexer em quase nada: joga a foto, escreve o que quer em i
 | `image` | file | — | — | Imagem RGB. Use `image` **ou** `video` (o modelo detecta o tipo do arquivo sozinho). |
 | `video` | file | — | — | Vídeo. É amostrado em frames e detectado quadro-a-quadro. |
 | `prompt` | str | "Detect all the main objects…" | — | O que localizar. Ver **Dicas de prompt**. |
-| `tiles` | int | 1 | 1–5 | **[imagem]** Divide em NxN pedaços e detecta cada um em resolução cheia (+ NMS). Recupera objetos **pequenos/ao fundo**. 1 = desligado. Ótimo p/ **contagem densa**. |
+| `tiles` | int | 1 | 1–5 | **[imagem]** Divide em NxN pedaços e detecta cada um em resolução cheia (+ NMS). Recupera objetos **pequenos/ao fundo** — mas pode gerar **falso-positivo** em fundo com texturas confundíveis (pedra/mato). 1 = desligado. Ver **Quando (não) usar tiling**. |
 | `generation_mode` | enum | `hybrid` | hybrid / ar / mtp | Modo de decodificação. `hybrid` equilibra velocidade e precisão. |
 | `tracker` | enum | `none` | none / sort / reid | **[vídeo]** `none` = só caixas, sem ID (estilo NVIDIA). `sort` = IDs por movimento (Kalman+Hungarian). `reid` = SORT + aparência (ResNet18). |
 | `detect_fps` | float | 3.0 | 0.5–10 | **[vídeo]** Detecções por segundo. Mais alto = acompanha melhor o movimento, mais lento/caro. |
@@ -57,7 +57,7 @@ Você **não precisa** mexer em quase nada: joga a foto, escreve o que quer em i
 - **`prompt`** — a frase (em inglês) dizendo o que procurar. É o controle **mais importante**. Ex.: `"Detect all the people"` (ache todas as pessoas). Seja específico.
 - **`temperature`** — o "quão criativo" ele é. **Pra contar, deixe `0`** (mais preciso, não inventa). Valores altos = mais chute.
 - **`max_new_tokens`** — quanto ele "pode falar". Cada objeto gasta um pouco. Se a foto tem **muitos** objetos (centenas) e a contagem parece cortada, **aumente** (ex.: 8192).
-- **`tiles`** *(só imagem)* — "lupa por pedaços". O modelo tem um **teto de resolução** e some com objeto pequeno/distante. Com `tiles: 3`, ele corta a foto em 3×3 e olha cada pedaço de perto → **acha os pequenos do fundo**. Use pra **contar** em foto grande/densa. Quanto maior o N, mais lento (NxN análises).
+- **`tiles`** *(só imagem)* — "lupa por pedaços". O modelo tem um **teto de resolução** e some com objeto pequeno/distante. Com `tiles: 3`, ele corta a foto em 3×3 e olha cada pedaço de perto → **acha os pequenos do fundo**. ⚠️ **Cuidado:** ao focar num pedaço, ele também fica mais propenso a **confundir textura com objeto** (ex.: marcar **pedra como boi**). Não é bala de prata — ver abaixo. Quanto maior o N, mais lento (NxN análises).
 - **`detect_fps`** *(só vídeo)* — **quantas vezes por segundo** ele olha o vídeo. Objeto **rápido** (carro, esteira) → número **alto** (5–10), pra acompanhar. Objeto **lento** → 2–3 já basta. Quanto maior, mais lento e mais caro.
 - **`max_detect_frames`** *(só vídeo)* — um **limite de segurança** de quantos quadros ele analisa (pra não ficar caro/demorado em vídeo longo). Se quiser mais precisão num vídeo, **aumente**.
 - **`tracker`** *(só vídeo)* — como ele lida com a **identidade** dos objetos:
@@ -73,7 +73,8 @@ Você **não precisa** mexer em quase nada: joga a foto, escreve o que quer em i
 | Situação | Configuração recomendada |
 |---|---|
 | **Contar objetos numa foto** (gado, ovos, peças) | `image` + `prompt: "Detect every individual X. Output one tight box per X."` + **`temperature: 0`** + `max_new_tokens: 8192` |
-| **Contar com objetos PEQUENOS / ao fundo** | acima **+ `tiles: 3`** (ou 4–5 em foto bem grande/densa) |
+| **Contar objetos PEQUENOS num fundo LIMPO** (ovos na bandeja, pinguins no gelo, vista aérea densa) | acima **+ `tiles: 3`** (ou 4–5 em foto bem grande) |
+| **Cena com texturas confundíveis** (pasto com pedras/moitas, terreno irregular) | **mantenha `tiles: 1`** — o tiling tende a marcar pedra/mato como objeto |
 | **Achar UMA coisa específica** numa foto | `image` + `prompt: "Detect the red car"` (descreva bem) |
 | **Marcar um ponto** em cada objeto (não caixa) | `image` + `prompt: "Point to each person."` |
 | **Vídeo bonito e fluido** (estilo NVIDIA, sem números) | `video` + **`tracker: none`** + `detect_fps: 5` (ou mais) + `max_detect_frames: 60` |
@@ -85,6 +86,18 @@ Você **não precisa** mexer em quase nada: joga a foto, escreve o que quer em i
 | **Ele inventou caixas onde não tem nada** | **`temperature: 0`** |
 
 > **Regra de ouro:** pra **contar**, use **foto** (não vídeo) com `temperature: 0`. Pra **mostrar movimento** num vídeo, use `tracker: none`. O resto é ajuste fino.
+
+### ⚖️ Quando (não) usar `tiles`
+
+O tiling **troca precisão por recall**: acha mais objetos pequenos, mas também **inventa mais** em regiões ambíguas (ao focar num pedaço cheio de grama + pedra, o modelo é "empurrado" a achar algo e marca a pedra como objeto).
+
+| ✅ Use `tiles: 2–5` | ❌ Fique em `tiles: 1` |
+|---|---|
+| Objetos minúsculos em foto **alta-res** | Foto **baixa-res** (não há detalhe a recuperar) |
+| Fundo **uniforme/limpo** (bandeja, gelo, esteira, vista aérea) | Fundo com **texturas confundíveis** (pedras, moitas, terreno) |
+| Itens parecidos e bem separados | Cena onde o "achar mais" gera **falso-positivo** |
+
+**Regra prática:** comece em `tiles: 1`. Só ligue o tiling se objetos pequenos estão **claramente sendo perdidos** e o fundo é limpo. Compare a contagem com e sem — se subir com **pedra/mato marcado**, volte pro `tiles: 1`.
 
 ## Output
 
