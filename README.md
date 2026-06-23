@@ -8,6 +8,21 @@ Dada uma **imagem ou vídeo** + uma instrução em texto, devolve rótulos com *
 
 ---
 
+## 🟢 Em palavras simples (comece por aqui)
+
+Pensa nele como um **"caça-objetos por comando de texto"**:
+
+> Você mostra uma **foto** (ou um **vídeo**) e escreve, em inglês, **o que procurar** — tipo *"Detect all the cars"* (detecte todos os carros). Ele devolve a mesma imagem com **quadradinhos verdes** em volta de cada objeto encontrado, e te diz **quantos** achou.
+
+Serve pra coisas como:
+- **Contar** — quantas cabeças de gado, ovos, pessoas, peças tem nesta foto?
+- **Achar** — onde está a placa de saída / o carro vermelho / o produto X?
+- **Marcar em vídeo** — desenhar caixas nos objetos ao longo de um vídeo.
+
+Você **não precisa** mexer em quase nada: joga a foto, escreve o que quer em inglês, e pronto. Os "controles avançados" abaixo só servem pra ajustar casos específicos.
+
+---
+
 ## Dois modelos (escolha o hardware)
 
 | Modelo | Hardware | Quando usar |
@@ -34,6 +49,39 @@ Dada uma **imagem ou vídeo** + uma instrução em texto, devolve rótulos com *
 | `temperature` | float | 0.2 | 0–2 | `0` = determinístico (recomendado p/ contagem; reduz falso-positivo). |
 | `top_p` | float | 0.9 | 0–1 | Amostragem nucleus. |
 | `repetition_penalty` | float | 1.1 | 1–2 | Evita repetição. |
+
+### 🧩 Entendendo os controles (em português claro)
+
+- **`image` / `video`** — o arquivo que você sobe. Tanto faz em qual campo: se for vídeo, ele entende sozinho. Use **um** dos dois.
+- **`prompt`** — a frase (em inglês) dizendo o que procurar. É o controle **mais importante**. Ex.: `"Detect all the people"` (ache todas as pessoas). Seja específico.
+- **`temperature`** — o "quão criativo" ele é. **Pra contar, deixe `0`** (mais preciso, não inventa). Valores altos = mais chute.
+- **`max_new_tokens`** — quanto ele "pode falar". Cada objeto gasta um pouco. Se a foto tem **muitos** objetos (centenas) e a contagem parece cortada, **aumente** (ex.: 8192).
+- **`detect_fps`** *(só vídeo)* — **quantas vezes por segundo** ele olha o vídeo. Objeto **rápido** (carro, esteira) → número **alto** (5–10), pra acompanhar. Objeto **lento** → 2–3 já basta. Quanto maior, mais lento e mais caro.
+- **`max_detect_frames`** *(só vídeo)* — um **limite de segurança** de quantos quadros ele analisa (pra não ficar caro/demorado em vídeo longo). Se quiser mais precisão num vídeo, **aumente**.
+- **`tracker`** *(só vídeo)* — como ele lida com a **identidade** dos objetos:
+  - **`none`** (padrão) → só desenha as caixas, **sem número**. É o mais limpo e o que a NVIDIA mostra. **Use este na dúvida.**
+  - **`sort`** → coloca um **número fixo** (#1, #2…) em cada objeto e tenta manter ao longo do vídeo. Bom pra objetos **diferentes** e movimento normal.
+  - **`reid`** → igual ao `sort`, mas também "lembra a aparência" — segura melhor o número quando o objeto some atrás de algo e volta. Mais lento. Bom pra **cruzamentos/oclusão**.
+- **`generation_mode` / `top_p` / `repetition_penalty`** — controles finos; **deixe no padrão** a não ser que você saiba o que está fazendo.
+
+---
+
+## 🍳 Receitas — qual configuração usar em cada situação
+
+| Situação | Configuração recomendada |
+|---|---|
+| **Contar objetos numa foto** (gado, ovos, peças) | `image` + `prompt: "Detect every individual X. Output one tight box per X."` + **`temperature: 0`** + `max_new_tokens: 8192` |
+| **Achar UMA coisa específica** numa foto | `image` + `prompt: "Detect the red car"` (descreva bem) |
+| **Marcar um ponto** em cada objeto (não caixa) | `image` + `prompt: "Point to each person."` |
+| **Vídeo bonito e fluido** (estilo NVIDIA, sem números) | `video` + **`tracker: none`** + `detect_fps: 5` (ou mais) + `max_detect_frames: 60` |
+| **Vídeo com objetos numerados** (poucos, distintos) | `video` + `tracker: sort` + `detect_fps: 4` |
+| **Vídeo com cruzamento/oclusão** (objetos somem e voltam) | `video` + `tracker: reid` + `detect_fps: 4` |
+| **Objetos rápidos** (trânsito, esteira) | suba o **`detect_fps`** (8–10) e o `max_detect_frames` proporcional |
+| **Vídeo longo, quer economizar** | `detect_fps: 2` + `max_detect_frames: 24` (menos quadros = mais barato) |
+| **A contagem veio "cortada"** (muitos objetos) | aumente **`max_new_tokens`** (8192) |
+| **Ele inventou caixas onde não tem nada** | **`temperature: 0`** |
+
+> **Regra de ouro:** pra **contar**, use **foto** (não vídeo) com `temperature: 0`. Pra **mostrar movimento** num vídeo, use `tracker: none`. O resto é ajuste fino.
 
 ## Output
 
